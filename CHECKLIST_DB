@@ -1,0 +1,1011 @@
+--TABLES CHECKLIST
+
+DECLARE @StartDate DATETIME2(3), 
+		@EndDate DATETIME2(3),
+		@DateDiff TINYINT
+
+SELECT DISTINCT TOP 1 @StartDate =  dateSnapshot FROM snapshot 
+ORDER BY DateSnapshot ASC
+
+SELECT DISTINCT TOP 1 @EndDate = dateSnapshot FROM snapshot 
+ORDER BY DateSnapshot DESC 
+
+SET @DateDiff = DATEDIFF(DAY, @StartDate, @EndDate)
+
+IF @DateDiff <= 32
+	BEGIN 
+		DROP TABLE IF EXISTS #SpaceUsed;
+		CREATE TABLE #SpaceUsed (
+			Name VARCHAR(100),
+			Rows BIGINT,
+			Space_reserved VARCHAR(50),
+			Data VARCHAR(50),
+			Index_size VARCHAR(50),
+			Space_unused VARCHAR(50)
+		)
+
+		DECLARE @var VARCHAR(100)
+		DECLARE percorre CURSOR FOR 
+	
+			SELECT name FROM sys.tables
+				WHERE name NOT IN ('ANS_SIB_Beneficiario_TempAdesoesSetemBro')
+	
+		OPEN   percorre
+		FETCH NEXT FROM percorre INTO @var 
+		WHILE @@FETCH_STATUS = 0
+			BEGIN
+		
+				INSERT INTO #SpaceUsed
+				EXEC SP_SPACEUSED  @var
+		
+				FETCH NEXT FROM percorre INTO @var 
+			END
+		CLOSE percorre
+		DEALLOCATE percorre
+		
+		
+
+		INSERT INTO [Snapshot]
+		SELECT 
+				Name, 
+				Rows, 
+				CONVERT(INT, REPLACE(Space_reserved, 'KB', '')) Space_reserved, 
+				CONVERT(INT, REPLACE(Data, 'KB', '')) DATA, 
+				CONVERT(INT, REPLACE(Index_size, 'KB', '')) Index_size,  
+				CONVERT(INT, REPLACE(Space_unused, 'KB', ''))Space_unused,
+				GETDATE() DateSnapshot
+
+		FROM #SpaceUsed
+		ORDER BY Space_reserved DESC
+
+
+		DROP TABLE IF EXISTS #Temp
+		;WITH CTE AS (
+		SELECT * FROM (
+						SELECT TOP (SELECT COUNT(*) FROM [Snapshot]) ROW_NUMBER() OVER(PARTITION BY name ORDER BY DateSnapshot DESC) NuKBer
+									,name
+									,(T2.data)
+									,dateSnapshot 
+									,rows
+							
+						FROM [Snapshot] T2 
+												/*WHERE  DateSnapshot > DATEADD(DAY, -1, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+												AND DateSnapshot < DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))
+												--AND name = 'snapshot'*/
+												ORDER BY T2.DateSnapshot DESC
+		) AS T 
+		)
+
+		SELECT DISTINCT CTe.name 
+				, CTE.data [Dados Anterior (KB)]
+				, T2.[Dados atuais (KB)]
+				, T2.[Dados atuais (KB)] - (SELECT TOP 1 T3.Data FROM Snapshot T3
+												WHERE DateSnapShot IN (
+																		SELECT  /*TOP 1 LAG(MAX(DateSnapshot)) OVER (ORDER BY DateSnapshot)*/ MIN(DateSnapshot) FROM snapshot T4
+																		WHERE T4.name = CTE.Name
+																			AND   DateSnapshot > DATEADD(DAY, -1, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+																			AND DateSnapshot < DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))
+																		/*GROUP BY DateSnapshot
+																		ORDER BY DateSnapshot DESC*/)
+												AND T3.name = CTE.name) [Crescimento 1 dia (KB)]
+				, T2.[Dados atuais (KB)] - (SELECT TOP 1 T3.Data FROM Snapshot T3
+												WHERE DateSnapShot IN (
+																		SELECT  MIN(DateSnapshot) FROM snapshot T4
+																		WHERE T4.name = CTE.Name
+																   			AND DateSnapshot >=  DATEADD(DAY, -7, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+																			AND DateSnapshot <= DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))
+																		/*GROUP BY DateSnapshot*/)
+												AND T3.name = CTE.name) [Crescimento 1 Semana (KB)]
+				, T2.[Dados atuais (KB)] - (SELECT TOP 1 T3.Data FROM Snapshot T3
+												WHERE DateSnapShot IN (
+																		SELECT  MIN(DateSnapshot) FROM snapshot T4
+																		WHERE T4.name = CTE.Name
+																			AND DateSnapshot >= DATEADD(DAY, -31, GETDATE())--DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+																			AND DateSnapshot <=  CONVERT(DATETIME2(3), EOMONTH(GETDATE()))
+																		/*GROUP BY DateSnapshot*/)
+												AND T3.name = CTE.name) [Crescimento 1 Mês (KB)]
+				, CTE.rows [Total de Linhas Anterior] 
+				, T2.Rows [Total de linhas atual]
+				, T2.Rows - CTE.rows [Crescimento linhas 1 dia]
+				, Cte.datesnapshot
+		INTO #Temp 
+		FROM CTE  
+		INNER JOIN (
+						SELECT  data [Dados atuais (KB)],  
+								datesnapshot, 
+								name ,
+								rows
+					   
+						FROM snapshot 
+						WHERE datesnapshot IN (
+												SELECT MAX(DateSnapshot) FROM snapshot)
+												--WHERE name = 'snapshot')
+						--AND Name = 'Snapshot'
+					) T2
+			ON(CTE.name = T2.name)
+		WHERE CTE.data <> T2.[Dados atuais (KB)]
+		/*AND CTE.DateSnapshot BETWEEN (SELECT  MIN(DateSnapshot) FROM snapshot T6
+												WHERE DateSnapshot < DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))) 
+										AND (SELECT  MAX(DateSnapshot) FROM snapshot T5
+										WHERE	DateSnapshot >= DATEADD(DAY, -1, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))))*/
+		AND CTE.DateSnapshot IN (SELECT TOP 1 LAG(MAX(dateSnapshot)) OVER (ORDER BY DateSnapshot) FROM snapshot GROUP BY DateSnapshot ORDER BY DateSNapshot DESC)
+		ORDER BY CTE.name  DESC
+
+		SELECT COALESCE(Name, NULL, 'TOTAL') Name,
+				SUM([Dados Atuais (KB)])[Dados Atuais (KB)], 
+				SUM([Crescimento 1 dia (KB)]) [Crescimento 1 dia (KB)],
+				SUM([Crescimento 1 semana (KB)]) [Crescimento 1 semana (KB)],
+				SUM([Crescimento 1 mês (KB)]) [Crescimento 1 mês (KB)],
+				SUM([Total de linhas Anterior]) [Total de linhas Anterior],
+				SUM([Total de linhas atual]) [Total de linhas atual],
+				SUM([Crescimento linhas 1 dia]) [Crescimento linhas 1 dia]
+		FROM #Temp
+		GROUP BY 
+			GROUPING SETS ((), name)
+	END 
+ELSE 
+	TRUNCATE TABLE Snapshot 
+
+
+
+--JOBS CHECKLIST 
+
+-- JOBS COM SUCESSO
+
+SELECT DISTINCT TOP 10 *
+FROM (
+	SELECT T1.name
+		,T1.Enabled
+		,T1.Description
+		,T2.database_name
+		,T2.step_id
+		,T2.step_name
+		,T2.command
+		--,last_run_date
+		,CASE WHEN T3.run_status  = CAST(0 AS CHAR(1)) THEN 'Falha'
+			WHEN T3.run_status  = CAST(1 AS CHAR(1)) THEN 'Foi Bem-sucedido'
+			WHEN T3.run_status  = CAST(2 AS CHAR(1)) THEN 'Repetir'
+			WHEN T3.run_status  = CAST(3 AS CHAR(1)) THEN 'Cancelado' 
+			WHEN T3.run_status  = CAST(4 AS CHAR(1)) THEN 'Em Andamento'
+		ELSE CAST(T3.run_status AS CHAR(1)) 
+		END Status_job
+		,T3.message
+		,T3.run_date
+FROM msdb.dbo.sysjobs T1
+INNER JOIN msdb.dbo.sysjobsteps T2
+	ON (T1.job_id = T2.job_id)
+INNER JOIN msdb.dbo.sysjobhistory T3
+	ON (T1.job_id = T3.job_id)
+) AS T 
+WHERE run_Date >= CONVERT(VARCHAR(100), GETDATE(), 112) 
+AND Status_job = 'Foi Bem-sucedido'
+AND database_name NOT IN ('MAster', 'msdb')
+AND Enabled = 1
+ORDER BY run_date DESC
+
+
+
+
+
+-- JOBS COM FALHA
+
+SELECT DISTINCT TOP 10 *
+FROM (
+	SELECT T1.name
+		,T1.Enabled
+		,T1.Description
+		,T2.database_name
+		,T2.step_id
+		,T2.step_name
+		,T2.command
+		--,last_run_date
+		,CASE WHEN T3.run_status  = CAST(0 AS CHAR(1)) THEN 'Falha'
+			WHEN T3.run_status  = CAST(1 AS CHAR(1)) THEN 'Foi Bem-sucedido'
+			WHEN T3.run_status  = CAST(2 AS CHAR(1)) THEN 'Repetir'
+			WHEN T3.run_status  = CAST(3 AS CHAR(1)) THEN 'Cancelado' 
+			WHEN T3.run_status  = CAST(4 AS CHAR(1)) THEN 'Em Andamento'
+		ELSE CAST(T3.run_status AS CHAR(1)) 
+		END Status_job
+		,T3.message
+		,T3.run_date
+FROM msdb.dbo.sysjobs T1
+INNER JOIN msdb.dbo.sysjobsteps T2
+	ON (T1.job_id = T2.job_id)
+INNER JOIN msdb.dbo.sysjobhistory T3
+	ON (T1.job_id = T3.job_id)
+) AS T 
+WHERE run_date >= CONVERT(VARCHAR(100), GETDATE(), 112) 
+AND Status_job <> 'Foi Bem-sucedido'
+AND database_name NOT IN ('MAster', 'msdb')
+AND Enabled = 1
+ORDER BY run_date DESC
+
+
+-- JOBS ALTERADOS 
+SELECT  DISTINCT TOP 10  *
+FROM (
+	SELECT T1.name
+		,T2.database_name
+		,CASE WHEN T1.Enabled = CAST(1 AS VARCHAR(20)) THEN 'Sim' 
+		 WHEN T1.enabled = CAST(0 AS VARCHAR(10)) THEN 'Não' ELSE CAST(T1.enabled AS VARCHAR(10)) END [Habilitado]
+		--,T1.Description		
+		/*,T2.step_id
+		,T2.step_name
+		,T2.command*/
+		--,last_run_date
+		/*,CASE WHEN T3.run_status  = CAST(0 AS CHAR(1)) THEN 'Falha'
+			WHEN T3.run_status  = CAST(1 AS CHAR(1)) THEN 'Foi Bem-sucedido'
+			WHEN T3.run_status  = CAST(2 AS CHAR(1)) THEN 'Repetir'
+			WHEN T3.run_status  = CAST(3 AS CHAR(1)) THEN 'Cancelado' 
+			WHEN T3.run_status  = CAST(4 AS CHAR(1)) THEN 'Em Andamento'
+		ELSE CAST(T3.run_status AS CHAR(1)) 
+		END Status_job*/
+		--,T3.message
+		,T1.date_created [Data Criacao]
+		,T1.date_modified [Data alteração]
+		,T3.run_date
+FROM msdb.dbo.sysjobs T1
+INNER JOIN msdb.dbo.sysjobsteps T2
+	ON (T1.job_id = T2.job_id)
+INNER JOIN msdb.dbo.sysjobhistory T3
+	ON (T1.job_id = T3.job_id)
+) AS T 
+WHERE run_date >= CONVERT(VARCHAR(100), GETDATE(), 112)
+AND database_name NOT IN ('MAster', 'msdb')
+ORDER BY run_date DESC
+
+
+--JOBS DEMORADOS
+
+SELECT  DISTINCT TOP 10  *
+FROM (
+	SELECT T1.name
+		,T2.database_name
+		/*,CASE WHEN T1.Enabled = CAST(1 AS VARCHAR(20)) THEN 'Sim' 
+		 WHEN T1.enabled = CAST(0 AS VARCHAR(10)) THEN 'Não' ELSE CAST(T1.enabled AS VARCHAR(10)) END [Habilitado]
+		--,T1.Description*/
+		/*,T2.step_id
+		,T2.step_name
+		,T2.command*/
+		,last_run_date
+		,CASE WHEN T3.run_status  = CAST(0 AS CHAR(1)) THEN 'Falha'
+			WHEN T3.run_status  = CAST(1 AS CHAR(1)) THEN 'Foi Bem-sucedido'
+			WHEN T3.run_status  = CAST(2 AS CHAR(1)) THEN 'Repetir'
+			WHEN T3.run_status  = CAST(3 AS CHAR(1)) THEN 'Cancelado' 
+			WHEN T3.run_status  = CAST(4 AS CHAR(1)) THEN 'Em Andamento'
+		ELSE CAST(T3.run_status AS CHAR(1)) 
+		END Status_job
+		, CONVERT(NUMERIC(18, 3), T2.last_run_duration) [Duração (S)]
+		, T3.message
+FROM msdb.dbo.sysjobs T1
+INNER JOIN msdb.dbo.sysjobsteps T2
+	ON (T1.job_id = T2.job_id)
+INNER JOIN msdb.dbo.sysjobhistory T3
+	ON (T1.job_id = T3.job_id)
+) AS T
+WHERE T.last_run_date >= CONVERT(VARCHAR(100), GETDATE(), 112) -1
+AND database_name NOT IN ('MAster', 'msdb')
+ORDER BY T.last_run_date DESC
+
+
+-- TOP QUERY Demoradas Dia Anterior
+
+GO
+WITH CTE_2 AS (
+			SELECT TOP 10
+				T2.text, 
+				(T1.execution_count) [Quatidade execução],
+				(T1.total_worker_time) [Total tempo de uso cpu (s)],
+				(T1.min_worker_time) [Média  tempo de uso cpu (s)],
+				(T1.max_worker_time) [Maior tempo de uso de cpu (s)],
+				(T1.min_logical_reads) [Min. Leituras],
+				(T1.max_logical_reads) [Max Leituras],
+				(T1.sql_handle)
+			FROM sys.dm_exec_query_stats T1
+			CROSS APPLY sys.dm_exec_sql_text (sql_handle) T2
+			WHERE last_execution_time >   DATEADD(DAY, -1, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+					AND Last_execution_time < DATEADD(DAY, 0, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+			OR TEXT LIKE '%CREATE TRIGGER [dbo].[trgHistoricoAuditoria]%'
+			ORDER BY [Quatidade execução] DESC 
+) 
+
+--SELECT * FROM CTE_2 
+SELECT COALESCE(text, NULL, 'TOTAL') Text, 
+		SUM([Quatidade execução]) [Quatidade execução],
+		SUM([Total tempo de uso cpu (s)]) [Total tempo de uso cpu (s)],
+		SUM([Média  tempo de uso cpu (s)]) [Média  tempo de uso cpu (s)],
+		SUM([Maior tempo de uso de cpu (s)]) [Maior tempo de uso de cpu (s)],
+		SUM([Min. Leituras]) [Min. Leituras],
+		SUM([Max Leituras])	 [Max Leituras]
+		
+		
+FROM CTE_2 
+GROUP BY 
+	GROUPING SETS ((), text)
+ORDER BY [Total tempo de uso cpu (s)] DESC 
+
+
+
+
+--Conexões abertas por usuários
+
+SELECT T1.login_name, T2.client_net_address,  COUNT(*) [Total Conections] FROM sys.dm_exec_sessions T1
+INNER JOIN sys.dm_exec_connections T2 
+	ON (T1.session_id = T2.session_id)
+GROUP BY T1.login_name, T2.client_net_address
+ORDER BY [Total Conections] DESC 
+
+
+
+
+-- Checka indices fragmentados 
+
+DECLARE @Table TABLE (
+	Referencia DATETIME2(3),
+	DatabaseName VARCHAR(50),
+	TableName VARCHAR(100),
+	IndexName VARCHAR(100),
+	[Fragmentação (%)] NUMERIC(18, 2),
+	Type_desc VARCHAR(60),
+	[Fill_Factor (%)] VARCHAR(100),
+	Data_compression_desc VARCHAR(50)
+)
+DECLARE @NameDatabase VARCHAR(50), @Database_id TINYINT, @comando NVARCHAR(MAX)
+DECLARE PercorreDatabase CURSOR FOR 
+	SELECT name, database_id FROM sys.databases 
+	--WHERE name NOT IN ('Master', 'Tempdb', 'msdb', 'ReportServer', 'ReportServerTempDB')
+	WHERE name IN ('siaa_teste', 'SIAPWEB_TESTE')
+OPEN PercorreDatabase 
+FETCH NEXT FROM PercorreDatabase INTO @NameDatabase, @Database_id
+WHILE @@FETCH_STATUS = 0 
+	BEGIN 
+		
+		SET @comando = N'
+						SELECT  
+								GETDATE() Referencia,
+								DB_NAME('+CAST(@Database_id AS VARCHAR(2))+') DatabaseName, 
+								T3.name TableName,
+								T2.name IndexName, 
+								CONVERT(NUMERIC(18, 2),T1.avg_fragmentation_in_percent) [Fragmentacao (%)],
+								T2.type_desc, 
+								T2.fill_factor [Fill_Factor (%)],
+								CASE WHEN T4.data_compression_desc = ''NONE''
+									THEN ''SEM COMPRESSÃO''
+								ELSE T4.data_compression_desc 
+								END data_compression_desc
+						FROM '+@NameDatabase+'.sys.dm_db_index_physical_stats('+CAST(@Database_id AS VARCHAR(2))+', NULL, NULL, NULL,''LIMITED'') AS T1
+						INNER JOIN '+@NameDatabase+'.sys.indexes  T2 
+							ON (T1.object_id = T2.object_id) 
+							AND (T1.index_id = T2.index_id)
+						INNER JOIN '+@NameDatabase+'.sys.tables  T3
+							ON (T2.object_id = T3.object_id) 
+						INNER JOIN '+@NameDatabase+'.sys.partitions  T4 
+							ON (T2.object_id = T4.object_id)
+							AND (T2.index_id = T4.index_id)
+						WHERE CONVERT(NUMERIC(18, 2),T1.avg_fragmentation_in_percent) > 10
+							  AND T2.name IS NOT NULL AND T2.is_hypothetical = 0'
+		INSERT INTO @Table
+		EXEC (@Comando) 
+
+		 
+		FETCH NEXT FROM PercorreDatabase INTO @NameDatabase, @Database_id
+	END
+CLOSE PercorreDatabase
+DEALLOCATE PercorreDatabase
+DROP TABLE IF EXISTS #StoreIndex
+SELECT Referencia,
+		DatabaseName,
+		TableName,
+		IndexName,
+		[Fragmentação (%)],
+		Type_desc,
+		[Fill_Factor (%)] ,
+		Data_compression_desc,
+		CASE WHEN [Fragmentação (%)] <= 30 THEN 'ALTER INDEX '+IndexName+' ON '+DatabaseName+'.dbo.'+TableName+' REORGANIZE'
+		WHEN [Fragmentação (%)] > 30 THEN 'ALTER INDEX '+IndexName+' ON ' +DatabaseName+'.dbo.'+TableName+' REBUILD' 
+		END COMANDO
+INTO #StoreIndex
+FROM @Table 
+ORDER BY [Fragmentação (%)] DESC 
+GO
+
+SELECT TOP 20 * FROM #StoreIndex 
+
+
+
+-- Retorna Wait Statistics
+IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'Log_wait_type')
+	BEGIN 
+		CREATE TABLE Log_wait_type (
+			WaitType VARCHAR(50),
+			Data_log DATETIME2(3),
+			[Wait (s)] NUMERIC(18,2),
+			[Resource (s)] NUMERIC(18, 2),
+			[Signal (s)] NUMERIC(18, 2),
+			WaitCount BIGINT,
+			[porcentagem (%)] NUMERIC(10,2)
+		)
+		
+	END
+GO
+WITH [Waits] AS
+    (SELECT
+        [wait_type],
+        [wait_time_ms] / 1000.0 AS [WaitS],
+        ([wait_time_ms] - [signal_wait_time_ms]) / 1000.0 AS [ResourceS],
+        [signal_wait_time_ms] / 1000.0 AS [SignalS],
+        [waiting_tasks_count] AS [WaitCount],
+        100.0 * [wait_time_ms] / SUM ([wait_time_ms]) OVER() AS [Percentage],
+        ROW_NUMBER() OVER(ORDER BY [wait_time_ms] DESC) AS [RowNum]
+    FROM sys.dm_os_wait_stats
+    WHERE [wait_type] NOT IN (
+        N'BROKER_EVENTHANDLER',         N'BROKER_RECEIVE_WAITFOR',
+        N'BROKER_TASK_STOP',            N'BROKER_TO_FLUSH',
+        N'BROKER_TRANSMITTER',          N'CHECKPOINT_QUEUE',
+        N'CHKPT',                       N'CLR_AUTO_EVENT',
+        N'CLR_MANUAL_EVENT',            N'CLR_SEMAPHORE',
+        N'DBMIRROR_DBM_EVENT',          N'DBMIRROR_EVENTS_QUEUE',
+        N'DBMIRROR_WORKER_QUEUE',       N'DBMIRRORING_CMD',
+        N'DIRTY_PAGE_POLL',             N'DISPATCHER_QUEUE_SEMAPHORE',
+        N'EXECSYNC',                    N'FSAGENT',
+        N'FT_IFTS_SCHEDULER_IDLE_WAIT', N'FT_IFTSHC_MUTEX',
+        N'HADR_CLUSAPI_CALL',           N'HADR_FILESTREAM_IOMGR_IOCOMPLETION',
+        N'HADR_LOGCAPTURE_WAIT',        N'HADR_NOTIFICATION_DEQUEUE',
+        N'HADR_TIMER_TASK',             N'HADR_WORK_QUEUE',
+        N'KSOURCE_WAKEUP',              N'LAZYWRITER_SLEEP',
+        N'LOGMGR_QUEUE',                N'ONDEMAND_TASK_QUEUE',
+        N'PWAIT_ALL_COMPONENTS_INITIALIZED',
+        N'QDS_PERSIST_TASK_MAIN_LOOP_SLEEP',
+        N'QDS_CLEANUP_STALE_QUERIES_TASK_MAIN_LOOP_SLEEP',
+        N'REQUEST_FOR_DEADLOCK_SEARCH', N'RESOURCE_QUEUE',
+        N'SERVER_IDLE_CHECK',           N'SLEEP_BPOOL_FLUSH',
+        N'SLEEP_DBSTARTUP',             N'SLEEP_DCOMSTARTUP',
+        N'SLEEP_MASTERDBREADY',         N'SLEEP_MASTERMDREADY',
+        N'SLEEP_MASTERUPGRADED',        N'SLEEP_MSDBSTARTUP',
+        N'SLEEP_SYSTEMTASK',            N'SLEEP_TASK',
+        N'SLEEP_TEMPDBSTARTUP',         N'SNI_HTTP_ACCEPT',
+        N'SP_SERVER_DIAGNOSTICS_SLEEP', N'SQLTRACE_BUFFER_FLUSH',
+        N'SQLTRACE_INCREMENTAL_FLUSH_SLEEP',
+        N'SQLTRACE_WAIT_ENTRIES',       N'WAIT_FOR_RESULTS',
+        N'WAITFOR',                     N'WAITFOR_TASKSHUTDOWN',
+        N'WAIT_XTP_HOST_WAIT',          N'WAIT_XTP_OFFLINE_CKPT_NEW_LOG',
+        N'WAIT_XTP_CKPT_CLOSE',         N'XE_DISPATCHER_JOIN',
+        N'XE_DISPATCHER_WAIT',          N'XE_TIMER_EVENT')
+    )
+
+INSERT INTO Log_wait_type
+SELECT DISTINCT
+    [W1].[wait_type] AS [WaitType],
+	GETDATE() [Data_log],
+    CAST ([W1].[WaitS] AS DECIMAL (16, 2)) AS [Wait_S],
+    CAST ([W1].[ResourceS] AS DECIMAL (16, 2)) AS [Resource_S],
+    CAST ([W1].[SignalS] AS DECIMAL (16, 2)) AS [Signal_S],
+    [W1].[WaitCount] AS [WaitCount],
+    CAST ([W1].[Percentage] AS DECIMAL (5, 2)) AS [Percentage]
+FROM [Waits] AS [W1]
+INNER JOIN [Waits] AS [W2]
+    ON [W2].[RowNum] <= [W1].[RowNum]
+GROUP BY [W1].[RowNum], [W1].[wait_type], [W1].[WaitS],
+    [W1].[ResourceS], [W1].[SignalS], [W1].[WaitCount], [W1].[Percentage]
+HAVING SUM ([W2].[Percentage]) - [W1].[Percentage] < 95; -- percentage threshold
+GO
+
+SELECT TOP 10 * FROM Log_wait_type
+WHERE Data_log >   DATEADD(DAY, -2, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+					AND Data_log < DATEADD(DAY, -1, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+ORDER BY [porcentagem (%)] DESC 
+
+
+
+--Tentativas de logins com erros
+
+DECLARE @StartDate VARCHAR(10) = CONVERT(VARCHAR(10), DATEADD(DAY, -1, SUBSTRING(CONVERT(VARCHAR(20), GETDATE(), 120), 0, 11)), 120)
+DECLARE @EndDate VARCHAR(10) = CONVERT(VARCHAR(10), DATEADD(DAY, 0, SUBSTRING(CONVERT(VARCHAR(20), GETDATE(), 120), 0, 11)), 120)
+DECLARE @TABLETEMP TABLE(
+	[Data_captura_Log] DATETIME2(3) DEFAULT GETDATE(),
+	LogDate DATETIME2(3),
+	ProcessInfo VARCHAR(20),
+	Message VARCHAR(MAX)
+)
+INSERT INTO @TABLETEMP (LogDate, ProcessInfo, Message)
+EXEC master.dbo.xp_readerrorlog 0, 1,  N'login', NULL, @StartDate, @EndDate, N'desc'
+
+-- EXEC master.dbo.sp_readerrorlog 6, 1, NULL, 'exec'
+SELECT TOP 100 [Data_captura_Log], Message [Message / nome_Usuário], qtdErrosPorTentativas = COUNT(*) FROM @TABLETEMP
+GROUP BY Message, [Data_captura_Log] 
+ORDER BY qtdErrosPorTentativas DESC 
+
+
+GO
+-- TOP 100 - Error Log do SQL SERVER 
+DECLARE @StartDate VARCHAR(10) = CONVERT(VARCHAR(10), DATEADD(DAY, -1, SUBSTRING(CONVERT(VARCHAR(20), GETDATE(), 120), 0, 11)), 120)
+DECLARE @EndDate VARCHAR(10) = CONVERT(VARCHAR(10), DATEADD(DAY, 0, SUBSTRING(CONVERT(VARCHAR(20), GETDATE(), 120), 0, 11)), 120)
+DECLARE @TABLETEMP TABLE(
+	[Data_captura_Log] DATETIME2(3) DEFAULT GETDATE(),
+	LogDate DATETIME2(3),
+	ProcessInfo VARCHAR(20),
+	Message VARCHAR(MAX)
+)
+INSERT INTO @TABLETEMP (LogDate, ProcessInfo, Message)
+EXEC master.dbo.xp_readerrorlog 0, 1,  NULL, NULL, @StartDate, @EndDate, N'desc'
+
+-- EXEC master.dbo.sp_readerrorlog 6, 1, NULL, 'exec'
+SELECT TOP 100 [Data_captura_Log], Message [Nome do ERRO], qtdErros = COUNT(*) FROM @TABLETEMP
+GROUP BY Message, [Data_captura_Log] 
+ORDER BY qtdErros DESC 
+
+
+
+
+-- CHECA LATENCIA IO DISK POR FILE E DATABASE ONLINE
+SELECT 	DISTINCT 
+	T.fileid, 
+	--T.filename,
+	SUBSTRING(T.io_handle_path, 4, 100) io_handle_path,
+	CONVERT(NUMERIC(18,2), T.size / 128.0) size,
+	T.[Nome do Volume],
+	T.total_bytes,
+	T.total_bytes / (1024 * 1024 * 1024) [TAMANHO TOTAL USADO (GB) VOLUME],
+	T.available_bytes / (1024 * 1024 * 1024) [TOTAL DISPONIVEL (GB) VOLUME],
+	CASE WHEN T.num_of_reads = 0 THEN '0' ELSE T.io_stall_read_ms / T.num_of_reads END [Latencia leitura (ms)],
+	CASE WHEN T.num_of_writes = 0 THEN '0' ELSE T.io_stall_write_ms / T.num_of_writes END [Latencia Gravação (ms)],
+	T.num_of_bytes_read / (1024 * 1024 * 1024) [Numero de bytes lidos(GB)],
+	T.num_of_bytes_written / (1024 * 1024 * 1024) [Numero de bytes Gravados(GB)],
+	T.num_of_bytes_written,
+	T.num_of_bytes_read,
+	/*T.io_stall_read_ms
+	T.io_stall_write_ms,
+	T.io_stall*/
+	T.text
+--INTO #tempSnapshot2
+FROM (
+	SELECT	
+			T1.fileid, 
+			T1.size,
+			--T1.filename,
+			T4.io_handle_path,
+			T2.volume_mount_point AS [Nome do Volume],
+			SUM(T2.total_bytes) total_bytes,
+			SUM(T2.available_bytes) available_bytes, 
+			SUM(T3.num_of_reads) num_of_reads,
+			SUM(T3.num_of_writes) num_of_writes,
+			SUM(T3.num_of_bytes_read) num_of_bytes_read,
+			SUM(T3.num_of_bytes_written) num_of_bytes_written,
+			SUM(T3.io_stall_read_ms) io_stall_read_ms,
+			SUM(T3.io_stall_write_ms) io_stall_write_ms,
+			SUM(T3.io_stall)  io_stall
+			/*(T2.total_bytes) total_bytes,
+			(T2.available_bytes) available_bytes, 
+			(T3.num_of_reads) num_of_reads,
+			(T3.num_of_writes) num_of_writes,
+			(T3.num_of_bytes_read) num_of_bytes_read,
+			(T3.num_of_bytes_written) num_of_bytes_written,
+			(T3.io_stall_read_ms) io_stall_read_ms,
+			(T3.io_stall_write_ms) io_stall_write_ms,
+			(T3.io_stall)  io_stall*/
+			,T7.text
+	FROM sys.sysfiles T1 
+	CROSS APPLY sys.dm_os_volume_stats(7, T1.fileid) T2
+	CROSS APPLY sys.dm_io_virtual_file_stats(7, T1.fileid) T3 
+	INNER JOIN sys.dm_io_pending_io_requests T4 
+		ON (T3.file_handle = T4.io_handle)
+	INNER JOIN sys.dm_os_schedulers T5
+		ON (T4.scheduler_address = T5.scheduler_address)
+	INNER JOIN sys.dm_exec_requests T6 
+		ON (T5.scheduler_id = T6.scheduler_id)
+	CROSS APPLY sys.dm_exec_sql_text(T6.sql_handle) T7
+	GROUP BY T2.volume_mount_point, T1.size, T1.fileid, T4.io_handle_path, T7.text
+) AS T 
+WHERE T.text NOT LIKE '%SELECT 	DISTINCT 
+							T.fileid, 
+							--T.filename,
+							SUBSTRING(T.io_handle_path, 4, 100) io_handle_path%'
+ORDER BY [Latencia leitura (ms)] DESC 
+OPTION (RECOMPILE);
+
+
+
+
+
+-- CHECA LATENCIA IO DISK  POR FILE E DATABASE OFFLINE
+SELECT 	DISTINCT 
+		--T.fileid, 
+		T.filename,
+		CONVERT(NUMERIC(18,2), T.size / 128.0) size,
+		T.[Nome do Volume],
+		--T.total_bytes,
+		--T.total_bytes / (1024 * 1024 * 1024) [TAMANHO TOTAL USADO (GB) VOLUME],
+		--T.available_bytes / (1024 * 1024 * 1024) [TOTAL DISPONIVEL (GB) VOLUME],
+		CASE WHEN T.num_of_reads = 0 THEN '0' ELSE T.io_stall_read_ms / T.num_of_reads END [Latencia leitura (ms)],
+		CASE WHEN T.num_of_writes = 0 THEN '0' ELSE T.io_stall_write_ms / T.num_of_writes END [Latencia Gravação (ms)],
+		T.num_of_bytes_read / (1024 * 1024 * 1024) [Numero de bytes lidos(GB)],
+		T.num_of_bytes_written / (1024 * 1024 * 1024) [Numero de bytes Gravados(GB)],
+		T.num_of_bytes_written,
+		T.num_of_bytes_read
+		/*T.io_stall_read_ms
+		T.io_stall_write_ms,
+		T.io_stall*/
+--INTO #tempSnapshot2
+FROM (
+		SELECT	
+				T1.fileid, 
+				T1.size,
+				T1.filename,
+				--T4.io_handle_path,
+				T2.volume_mount_point AS [Nome do Volume],
+				SUM(T2.total_bytes) total_bytes,
+				SUM(T2.available_bytes) available_bytes, 
+				SUM(T3.num_of_reads) num_of_reads,
+				SUM(T3.num_of_writes) num_of_writes,
+				SUM(T3.num_of_bytes_read) num_of_bytes_read,
+				SUM(T3.num_of_bytes_written) num_of_bytes_written,
+				SUM(T3.io_stall_read_ms) io_stall_read_ms,
+				SUM(T3.io_stall_write_ms) io_stall_write_ms,
+				SUM(T3.io_stall)  io_stall
+				/*(T2.total_bytes) total_bytes,
+				(T2.available_bytes) available_bytes, 
+				(T3.num_of_reads) num_of_reads,
+				(T3.num_of_writes) num_of_writes,
+				(T3.num_of_bytes_read) num_of_bytes_read,
+				(T3.num_of_bytes_written) num_of_bytes_written,
+				(T3.io_stall_read_ms) io_stall_read_ms,
+				(T3.io_stall_write_ms) io_stall_write_ms,
+				(T3.io_stall)  io_stall*/
+		FROM sys.sysfiles T1 
+		CROSS APPLY sys.dm_os_volume_stats(7, T1.fileid) T2
+		CROSS APPLY sys.dm_io_virtual_file_stats(7, T1.fileid) T3 
+		/*INNER JOIN sys.dm_io_pending_io_requests T4 
+			ON (T3.file_handle = T4.io_handle)
+		INNER JOIN sys.dm_os_schedulers T5
+			ON (T4.scheduler_address = T5.scheduler_address)
+		INNER JOIN sys.dm_exec_requests T6 
+			ON (T5.scheduler_id = T6.scheduler_id)
+		CROSS APPLY sys.dm_exec_sql_text(T6.sql_handle) T7*/
+		GROUP BY T2.volume_mount_point, T1.size, T1.fileid, T1.filename
+	) AS T 
+ORDER BY [Latencia leitura (ms)] DESC 
+OPTION (RECOMPILE);
+
+
+
+
+
+
+
+
+
+
+
+
+SELECT * FROM sys.dm_io_pending_io_requests T1
+INNER JOIN sys.dm_os_schedulers T2
+	ON (T1.scheduler_address = T2.scheduler_address)
+INNER JOIN sys.dm_exec_requests T3 
+	ON (T2.scheduler_id = T3.scheduler_id)
+CROSS APPLY sys.dm_exec_sql_text(T3.sql_handle)
+WHERE T1.io_type = 'DISK'
+
+
+
+SELECT 	DISTINCT 
+		T.file_id, 
+		--T.filename,
+		SUBSTRING(T.io_handle_path, 4, 100) io_handle_path,
+		CONVERT(NUMERIC(18,2), T.size / 128.0) size,
+		T.[Nome do Volume],
+		T.total_bytes,
+		T.total_bytes / (1024 * 1024 * 1024) [TAMANHO TOTAL USADO (GB) VOLUME],
+		T.available_bytes / (1024 * 1024 * 1024) [TOTAL DISPONIVEL (GB) VOLUME],
+		CASE WHEN T.num_of_reads = 0 THEN '0' ELSE T.io_stall_read_ms / T.num_of_reads END [Latencia leitura (ms)],
+		CASE WHEN T.num_of_writes = 0 THEN '0' ELSE T.io_stall_write_ms / T.num_of_writes END [Latencia Gravação (ms)],
+		T.num_of_bytes_read / (1024 * 1024 * 1024) [Numero de bytes lidos(GB)],
+		T.num_of_bytes_written / (1024 * 1024 * 1024) [Numero de bytes Gravados(GB)],
+		T.num_of_bytes_written,
+		T.num_of_bytes_read,
+		/*T.io_stall_read_ms
+		T.io_stall_write_ms,
+		T.io_stall*/
+		T.text
+--INTO #tempSnapshot2
+FROM (
+		SELECT	
+				T1.file_id, 
+				T1.size,
+				--T1.filename,
+				T4.io_handle_path,
+				T2.volume_mount_point AS [Nome do Volume],
+				SUM(T2.total_bytes) total_bytes,
+				SUM(T2.available_bytes) available_bytes, 
+				SUM(T3.num_of_reads) num_of_reads,
+				SUM(T3.num_of_writes) num_of_writes,
+				SUM(T3.num_of_bytes_read) num_of_bytes_read,
+				SUM(T3.num_of_bytes_written) num_of_bytes_written,
+				SUM(T3.io_stall_read_ms) io_stall_read_ms,
+				SUM(T3.io_stall_write_ms) io_stall_write_ms,
+				SUM(T3.io_stall)  io_stall
+				/*(T2.total_bytes) total_bytes,
+				(T2.available_bytes) available_bytes, 
+				(T3.num_of_reads) num_of_reads,
+				(T3.num_of_writes) num_of_writes,
+				(T3.num_of_bytes_read) num_of_bytes_read,
+				(T3.num_of_bytes_written) num_of_bytes_written,
+				(T3.io_stall_read_ms) io_stall_read_ms,
+				(T3.io_stall_write_ms) io_stall_write_ms,
+				(T3.io_stall)  io_stall*/
+				,T7.text
+		FROM sys.master_files T1 
+		CROSS APPLY sys.dm_os_volume_stats(T1.database_id, T1.file_id) T2
+		CROSS APPLY sys.dm_io_virtual_file_stats(T1.database_id, T1.file_Id) T3 
+		INNER JOIN sys.dm_io_pending_io_requests T4 
+			ON (T3.file_handle = T4.io_handle)
+		INNER JOIN sys.dm_os_schedulers T5
+			ON (T4.scheduler_address = T5.scheduler_address)
+		INNER JOIN sys.dm_exec_requests T6 
+			ON (T5.scheduler_id = T6.scheduler_id)
+		CROSS APPLY sys.dm_exec_sql_text(T6.sql_handle) T7
+		GROUP BY T2.volume_mount_point, T1.size, T1.file_id, T4.io_handle_path, T7.text
+	) AS T 
+WHERE T.text NOT LIKE '%SELECT DISTINCT T.file_id%'
+									
+ORDER BY [Latencia leitura (ms)] DESC 
+OPTION (RECOMPILE);
+
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED
+
+SELECT DISTINCT DB_NAME(mf.database_id) AS [Database]
+,mf.physical_name
+,r.io_pending
+,r.io_pending_ms_ticks
+,r.io_type
+,fs.num_of_reads
+,fs.num_of_writes
+,ER.session_id
+,ST.TEXT
+FROM sys.dm_io_pending_io_requests AS r 
+INNER JOIN sys.dm_io_virtual_file_stats(NULL, NULL) AS fs 
+	ON r.io_handle = fs.file_handle
+INNER JOIN sys.master_files AS mf 
+	ON fs.database_id = mf.database_id
+AND fs.file_id = mf.file_id
+INNER JOIN sys.dm_os_schedulers os 
+	ON r.scheduler_address = os.scheduler_address
+INNER JOIN sys.dm_exec_requests AS ER 
+	ON os.scheduler_id = ER.Scheduler_id
+CROSS APPLY sys.dm_exec_sql_text(ER.sql_handle) AS ST
+WHERE ST.text NOT LIKE '%SELECT DISTINCT DB_NAME(mf.database_id) AS [Database]
+								,mf.physical_name
+								,r.io_pending%' 
+ORDER BY r.io_pending_ms_ticks DESC;
+go
+
+
+
+
+DBCC DROPCLEANBUFFERS
+Select DB_NAME(database_id) As 'Database',
+	COUNT(*) * 8 / 1024 As 'Cached Size (MB)'
+	--SUM(CONVERT(BIGINT, free_space_in_bytes)) / (1024 * 1024) 
+From sys.dm_os_buffer_descriptors
+Where database_id <> 32767
+Group By DB_NAME(database_id)
+Order By 'Cached Size (MB)' Desc
+
+
+
+
+
+
+
+
+SELECT  MIN(DateSnapshot) FROM snapshot T4
+--WHERE T4.name = CTE.Name
+WHERE 
+	 DateSnapshot >=  DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+	AND DateSnapshot <=  CONVERT(DATETIME2(3), EOMONTH(GETDATE()))
+
+
+
+SELECT DATEADD(DAY, -7, DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0) + 7)
+SELECT GETDATE() + 31
+
+
+SELECT DATEDIFF(DAY, DATEADD(DAY, 0, DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)), DATEDIFF(DAY, GETDATE(), EOMONTH(GETDATE())))
+
+
+SELECT CONVERT(DATETIME2(3), EOMONTH(GETDATE()))
+
+
+
+
+SELECT DATEADD(DAY, -7, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+SELECT DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))
+
+
+SELECT DATEDIFF(DAY, , EOMONTH(GETDATE()-5)
+SELECT CONVERT(TINYINT, DATEDIFF(DAY, DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0), CONVERT(DATETIME2(3), EOMONTH(GETDATE()))))
+
+
+
+SELECT CONVERT(TINYINT, CONVERT(TINYINT, DATEDIFF(DAY, DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0), CONVERT(DATETIME2(3), EOMONTH(GETDATE())))) - 
+	   CONVERT(TINYINT, DATEDIFF(DAY, GETDATE(), EOMONTH(GETDATE()))))
+
+
+
+
+SELECT  MIN(DateSnapshot) FROM snapshot T4
+		WHERE
+			 DateSnapshot >= 
+							DATEADD(DAY,  -7, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+			AND DateSnapshot <= DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))
+			GROUP BY DateSnapshot
+
+
+SELECT DATEADD(DAY, - CONVERT(TINYINT, CONVERT(TINYINT, DATEDIFF(DAY, DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0), CONVERT(DATETIME2(3), EOMONTH(GETDATE())))) - 
+	   CONVERT(TINYINT, DATEDIFF(DAY, GETDATE(), EOMONTH(GETDATE())))) , DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+
+
+
+SELECT DATEDIFF(DAY, DATEADD(DAY, -7, GETDATE()), GETDATE())
+
+
+
+---------------------------------------------
+DECLARE @StartDate DATETIME2(3), 
+		@EndDate DATETIME2(3),
+		@DateDiff TINYINT
+
+SELECT DISTINCT TOP 1 @StartDate =  dateSnapshot FROM snapshot 
+ORDER BY DateSnapshot ASC
+
+SELECT DISTINCT TOP 1 @EndDate = dateSnapshot FROM snapshot 
+ORDER BY DateSnapshot DESC 
+
+SET @DateDiff = DATEDIFF(DAY, @StartDate, @EndDate)
+
+IF @DateDiff <= 32
+	BEGIN 
+		DROP TABLE IF EXISTS #SpaceUsed;
+		CREATE TABLE #SpaceUsed (
+			Name VARCHAR(100),
+			Rows BIGINT,
+			Space_reserved VARCHAR(50),
+			Data VARCHAR(50),
+			Index_size VARCHAR(50),
+			Space_unused VARCHAR(50)
+		)
+
+		DECLARE @var VARCHAR(100)
+		DECLARE percorre CURSOR FOR 
+	
+			SELECT name FROM sys.tables
+				WHERE name NOT IN ('ANS_SIB_Beneficiario_TempAdesoesSetemBro')
+	
+		OPEN   percorre
+		FETCH NEXT FROM percorre INTO @var 
+		WHILE @@FETCH_STATUS = 0
+			BEGIN
+		
+				INSERT INTO #SpaceUsed
+				EXEC SP_SPACEUSED  @var
+		
+				FETCH NEXT FROM percorre INTO @var 
+			END
+		CLOSE percorre
+		DEALLOCATE percorre
+		
+		
+
+		INSERT INTO [Snapshot]
+		SELECT 
+				Name, 
+				Rows, 
+				CONVERT(INT, REPLACE(Space_reserved, 'KB', '')) Space_reserved, 
+				CONVERT(INT, REPLACE(Data, 'KB', '')) DATA, 
+				CONVERT(INT, REPLACE(Index_size, 'KB', '')) Index_size,  
+				CONVERT(INT, REPLACE(Space_unused, 'KB', ''))Space_unused,
+				GETDATE() DateSnapshot
+
+		FROM #SpaceUsed
+		ORDER BY Space_reserved DESC
+
+
+		DROP TABLE IF EXISTS #Temp
+		;WITH CTE AS (
+		SELECT * FROM (
+						SELECT TOP (SELECT COUNT(*) FROM [Snapshot]) ROW_NUMBER() OVER(PARTITION BY name ORDER BY DateSnapshot DESC) NuKBer
+									,name
+									,(T2.data)
+									,dateSnapshot 
+									,rows
+							
+						FROM [Snapshot] T2 
+												/*WHERE  DateSnapshot > DATEADD(DAY, -1, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+												AND DateSnapshot < DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))
+												--AND name = 'snapshot'*/
+												ORDER BY T2.DateSnapshot DESC
+		) AS T 
+		)
+
+		SELECT DISTINCT CTe.name 
+				, CTE.data [Dados Anterior (KB)]
+				, T2.[Dados atuais (KB)]
+				, T2.[Dados atuais (KB)] - (SELECT TOP 1 T3.Data FROM Snapshot T3
+												WHERE DateSnapShot IN (
+																		SELECT  /*TOP 1 LAG(MAX(DateSnapshot)) OVER (ORDER BY DateSnapshot)*/ MIN(DateSnapshot) FROM snapshot T4
+																		WHERE T4.name = CTE.Name
+																			AND   DateSnapshot > DATEADD(DAY, -1, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+																			AND DateSnapshot < DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))
+																		/*GROUP BY DateSnapshot
+																		ORDER BY DateSnapshot DESC*/)
+												AND T3.name = CTE.name) [Crescimento 1 dia (KB)]
+				, T2.[Dados atuais (KB)] - (SELECT TOP 1 T3.Data FROM Snapshot T3
+												WHERE DateSnapShot IN (
+																		SELECT  MIN(DateSnapshot) FROM snapshot T4
+																		WHERE T4.name = CTE.Name
+																   			AND DateSnapshot >=  DATEADD(DAY, -7, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+																			AND DateSnapshot <= DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))
+																		/*GROUP BY DateSnapshot*/)
+												AND T3.name = CTE.name) [Crescimento 1 Semana (KB)]
+				, T2.[Dados atuais (KB)] - (SELECT TOP 1 T3.Data FROM Snapshot T3
+												WHERE DateSnapShot IN (
+																		SELECT  MIN(DateSnapshot) FROM snapshot T4
+																		WHERE T4.name = CTE.Name
+																			AND DateSnapshot >= DATEADD(DAY, -31, GETDATE())--DATEADD(month, DATEDIFF(month, 0, GETDATE()), 0)
+																			AND DateSnapshot <=  CONVERT(DATETIME2(3), EOMONTH(GETDATE()))
+																		/*GROUP BY DateSnapshot*/)
+												AND T3.name = CTE.name) [Crescimento 1 Mês (KB)]
+				, CTE.rows [Total de Linhas Anterior] 
+				, T2.Rows [Total de linhas atual]
+				, T2.Rows - CTE.rows [Crescimento linhas 1 dia]
+				, Cte.datesnapshot
+		INTO #Temp 
+		FROM CTE  
+		INNER JOIN (
+						SELECT  data [Dados atuais (KB)],  
+								datesnapshot, 
+								name ,
+								rows
+					   
+						FROM snapshot 
+						WHERE datesnapshot IN (
+												SELECT MAX(DateSnapshot) FROM snapshot)
+												--WHERE name = 'snapshot')
+						--AND Name = 'Snapshot'
+					) T2
+			ON(CTE.name = T2.name)
+		WHERE CTE.data <> T2.[Dados atuais (KB)]
+		/*AND CTE.DateSnapshot BETWEEN (SELECT  MIN(DateSnapshot) FROM snapshot T6
+												WHERE DateSnapshot < DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))) 
+										AND (SELECT  MAX(DateSnapshot) FROM snapshot T5
+										WHERE	DateSnapshot >= DATEADD(DAY, -1, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))))*/
+		AND CTE.DateSnapshot IN (SELECT TOP 1 LAG(MAX(dateSnapshot)) OVER (ORDER BY DateSnapshot) FROM snapshot GROUP BY DateSnapshot ORDER BY DateSNapshot DESC)
+		ORDER BY CTE.name  DESC
+
+		SELECT COALESCE(Name, NULL, 'TOTAL') Name,
+				SUM([Dados Atuais (KB)])[Dados Atuais (KB)], 
+				SUM([Crescimento 1 dia (KB)]) [Crescimento 1 dia (KB)],
+				SUM([Crescimento 1 semana (KB)]) [Crescimento 1 semana (KB)],
+				SUM([Crescimento 1 mês (KB)]) [Crescimento 1 mês (KB)],
+				SUM([Total de linhas Anterior]) [Total de linhas Anterior],
+				SUM([Total de linhas atual]) [Total de linhas atual],
+				SUM([Crescimento linhas 1 dia]) [Crescimento linhas 1 dia]
+		FROM #Temp
+		GROUP BY 
+			GROUPING SETS ((), name)
+	END 
+ELSE 
+	TRUNCATE TABLE Snapshot 
+	
+
+
+
+
+
+SELECT  MIN(DateSnapshot) FROM snapshot T4
+WHERE 
+	DateSnapshot >=  DATEADD(DAY, -7, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101')))))
+	AND DateSnapshot <= DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))
+
+
+SELECT DATEDIFF(DAY, DATEADD(DAY, -7, DATEADD(MINUTE, 59, DATEADD(SECOND, 59, DATEADD(HOUR, 23, DATEADD(DAY, DATEDIFF(Day, '19000101', GETDATE()), '19000101'))))), GETDATE())
